@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#123b66">
+<title>TD6 Entrant Tracker TEST v0.02</title>
+<link rel="manifest" href="manifest.webmanifest">
+<style>
+:root{font-family:Arial,Helvetica,sans-serif;color:#17212b;background:#f3f6fa}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;background:#f3f6fa}
+header{background:#123b66;color:#fff;padding:15px 16px 13px;position:sticky;top:0;z-index:5;box-shadow:0 2px 8px rgba(0,0,0,.18)}
+.header-row{display:flex;align-items:center;justify-content:space-between;gap:12px}
+h1{font-size:20px;margin:0}
+.test{background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;border-radius:999px;padding:5px 9px;font-size:12px;font-weight:800}
+main{max-width:660px;margin:0 auto;padding:14px}
+.card{background:#fff;border:1px solid #cbd5df;border-radius:13px;box-shadow:0 3px 14px rgba(0,0,0,.06);margin-bottom:13px;overflow:hidden}
+.card h2{font-size:15px;margin:0;padding:12px 14px;background:#f8fafc;border-bottom:1px solid #d9e1e7}
+.content{padding:14px}
+.identity{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.item{background:#f7f9fb;border:1px solid #d7e0e7;border-radius:9px;padding:9px 10px}
+.item small{display:block;color:#667582;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.03em}
+.item strong{display:block;margin-top:3px;font-size:14px;overflow-wrap:anywhere}
+.status-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.status{border:1px solid #ccd7df;border-radius:10px;padding:11px;background:#fbfcfd;min-height:74px}
+.status small{display:block;color:#5c6c78;font-weight:700;font-size:11px;text-transform:uppercase}
+.status strong{display:block;margin-top:6px;font-size:17px}
+.status span{display:block;margin-top:4px;color:#5d6b77;font-size:12px;line-height:1.35}
+.good{color:#18703d}.warn{color:#b45309}.bad{color:#a11b1b}
+button{width:100%;min-height:54px;border:0;border-radius:11px;font-size:18px;font-weight:800;cursor:pointer}
+.start{background:#178045;color:#fff}.stop{background:#a32a2a;color:#fff}
+button:disabled{opacity:.45;cursor:default}
+.actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.note{font-size:13px;line-height:1.45;color:#52616d;margin:10px 0 0}
+.queue{font-size:13px;line-height:1.5}
+.footer{font-size:12px;color:#60707d;text-align:center;padding:4px 8px 18px}
+@media(max-width:520px){.identity,.status-grid{grid-template-columns:1fr}.actions{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+  <div class="header-row">
+    <h1>Entrant Tracking</h1>
+    <span class="test">TD6 TEST v0.02</span>
+  </div>
+</header>
+<main>
+  <section class="card">
+    <h2>Test identity</h2>
+    <div class="content identity">
+      <div class="item"><small>Rally number</small><strong id="rallyNo">—</strong></div>
+      <div class="item"><small>Driver</small><strong id="driverName">—</strong></div>
+      <div class="item"><small>Test event</small><strong id="rallyTitle">—</strong></div>
+      <div class="item"><small>Tracking identity</small><strong id="route">—</strong></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Tracking status</h2>
+    <div class="content status-grid">
+      <div class="status">
+        <small>Tracker</small>
+        <strong id="trackerState">Stopped</strong>
+        <span id="intervalText">Report interval —</span>
+      </div>
+      <div class="status">
+        <small>GPS</small>
+        <strong id="gpsState">Waiting</strong>
+        <span id="gpsDetail">No position yet</span>
+      </div>
+      <div class="status">
+        <small>Last sent</small>
+        <strong id="lastSent">Not sent</strong>
+        <span id="sendDetail">Google not contacted yet</span>
+      </div>
+      <div class="status">
+        <small>Offline queue</small>
+        <strong id="queueCount">0</strong>
+        <span>Stored reports waiting to send</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Controls</h2>
+    <div class="content">
+      <div class="actions">
+        <button id="startBtn" class="start">Start Tracking</button>
+        <button id="stopBtn" class="stop" disabled>Stop Tracking</button>
+      </div>
+      <p class="note">Start the tracker before driving. Keep the phone powered and do not operate it while the vehicle is moving. For this first test, leave the screen on and reduce brightness.</p>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Latest activity</h2>
+    <div class="content queue" id="activity">App ready. Select Start Tracking while stationary.</div>
+  </section>
+</main>
+<div class="footer">TD6 fenced development · separate from production STC Recorder</div>
+
+<script>
+(() => {
+  'use strict';
+
+  const VERSION = 'v0.02';
+  const CONFIG_FILE = 'tracker-config.json';
+  const QUEUE_KEY = 'td6-tracker-test-queue-v001';
+  const STATE_KEY = 'td6-tracker-test-state-v001';
+
+  let config = null;
+  let tracking = false;
+  let watchId = null;
+  let sendTimer = null;
+  let wakeLock = null;
+  let latestFix = null;
+  let sequence = 0;
+  let sendBusy = false;
+
+  const $ = id => document.getElementById(id);
+
+  function setActivity(text) {
+    $('activity').textContent = `${new Date().toLocaleTimeString()} — ${text}`;
+  }
+
+  function setClass(el, cls) {
+    el.classList.remove('good','warn','bad');
+    if (cls) el.classList.add(cls);
+  }
+
+  function loadQueue() {
+    try {
+      const value = JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]');
+      return Array.isArray(value) ? value : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function saveQueue(queue) {
+    localStorage.setItem(QUEUE_KEY, JSON.stringify(queue));
+    $('queueCount').textContent = String(queue.length);
+  }
+
+  function updateQueueCount() {
+    $('queueCount').textContent = String(loadQueue().length);
+  }
+
+  async function loadConfig() {
+    const response = await fetch(CONFIG_FILE, {cache:'no-store'});
+    if (!response.ok) throw new Error(`Config HTTP ${response.status}`);
+    config = await response.json();
+
+    $('rallyNo').textContent = config.rallyNo;
+    $('driverName').textContent = config.driverName;
+    $('rallyTitle').textContent = config.rallyTitle;
+    $('route').textContent = config.route;
+    $('intervalText').textContent = `Report every ${config.reportIntervalSeconds} seconds`;
+  }
+
+  async function requestWakeLock() {
+    try {
+      if ('wakeLock' in navigator && document.visibilityState === 'visible') {
+        wakeLock = await navigator.wakeLock.request('screen');
+        wakeLock.addEventListener('release', () => { wakeLock = null; });
+      }
+    } catch (_) {}
+  }
+
+  async function releaseWakeLock() {
+    try {
+      if (wakeLock) await wakeLock.release();
+    } catch (_) {}
+    wakeLock = null;
+  }
+
+  function onPosition(position) {
+    latestFix = {
+      latitude: position.coords.latitude,
+      longitude: position.coords.longitude,
+      accuracy: position.coords.accuracy,
+      speedKph: Number.isFinite(position.coords.speed) ? Math.max(0, position.coords.speed * 3.6) : '',
+      gpsTime: new Date(position.timestamp || Date.now()).toISOString()
+    };
+
+    $('gpsState').textContent = 'GPS ready';
+    setClass($('gpsState'), latestFix.accuracy <= 15 ? 'good' : 'warn');
+    $('gpsDetail').textContent =
+      `${latestFix.latitude.toFixed(5)}, ${latestFix.longitude.toFixed(5)} · accuracy ${latestFix.accuracy.toFixed(0)} m`;
+
+    if (tracking && !$('lastSent').dataset.firstFixSent) {
+      $('lastSent').dataset.firstFixSent = '1';
+      queueLatestFix();
+    }
+  }
+
+  function onPositionError(error) {
+    $('gpsState').textContent = 'GPS problem';
+    setClass($('gpsState'), 'bad');
+    $('gpsDetail').textContent = error.message || 'Position unavailable';
+    setActivity(`GPS error: ${error.message || error.code}`);
+  }
+
+  function startGps() {
+    if (!navigator.geolocation) throw new Error('This browser does not support GPS.');
+    if (watchId !== null) return;
+    watchId = navigator.geolocation.watchPosition(onPosition, onPositionError, {
+      enableHighAccuracy: true,
+      maximumAge: 5000,
+      timeout: 20000
+    });
+  }
+
+  function stopGps() {
+    if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+    watchId = null;
+  }
+
+  function makeReport() {
+    if (!latestFix) return null;
+    sequence += 1;
+    return {
+      eventId: config.eventId,
+      rallyTitle: config.rallyTitle,
+      day: 'Tracking',
+      route: config.route,
+      rallyNo: config.rallyNo,
+      driverName: config.driverName,
+      latitude: latestFix.latitude,
+      longitude: latestFix.longitude,
+      accuracy: latestFix.accuracy,
+      speedKph: latestFix.speedKph,
+      senderId: `TD6-PHONE-${config.rallyNo}`,
+      sequence,
+      gpsTime: latestFix.gpsTime
+    };
+  }
+
+  function queueLatestFix() {
+    const report = makeReport();
+    if (!report) {
+      setActivity('Waiting for the first GPS position.');
+      return;
+    }
+    const queue = loadQueue();
+    queue.push(report);
+    saveQueue(queue);
+    setActivity(`Position queued · sequence ${report.sequence}`);
+    flushQueue();
+  }
+
+  async function submitReport(report) {
+    const params = new URLSearchParams({
+      mode: 'trackingSubmit',
+      key: config.key,
+      data: JSON.stringify(report),
+      _: String(Date.now())
+    });
+    const response = await fetch(`${config.endpoint}?${params.toString()}`, {
+      method: 'GET',
+      cache: 'no-store'
+    });
+    if (!response.ok) throw new Error(`Google HTTP ${response.status}`);
+    const data = await response.json();
+    if (!data.ok) throw new Error(data.error || 'Submission rejected');
+    return data;
+  }
+
+  async function flushQueue() {
+    if (sendBusy || !navigator.onLine) {
+      if (!navigator.onLine) {
+        $('sendDetail').textContent = 'Offline — reports retained on phone';
+        setClass($('lastSent'), 'warn');
+      }
+      return;
+    }
+
+    sendBusy = true;
+    try {
+      let queue = loadQueue();
+      while (queue.length) {
+        const report = queue[0];
+        try {
+          await submitReport(report);
+          queue.shift();
+          saveQueue(queue);
+          const sent = new Date();
+          $('lastSent').textContent = sent.toLocaleTimeString();
+          $('sendDetail').textContent = `Sequence ${report.sequence} accepted by Google`;
+          setClass($('lastSent'), 'good');
+          setActivity(`Google accepted sequence ${report.sequence}.`);
+        } catch (error) {
+          $('sendDetail').textContent = `Waiting to retry: ${error.message}`;
+          setClass($('lastSent'), 'warn');
+          setActivity(`Send delayed. Report remains queued.`);
+          break;
+        }
+      }
+    } finally {
+      sendBusy = false;
+    }
+  }
+
+  async function startTracking() {
+    if (tracking) return;
+    tracking = true;
+    $('trackerState').textContent = 'Running';
+    setClass($('trackerState'), 'good');
+    $('startBtn').disabled = true;
+    $('stopBtn').disabled = false;
+    $('lastSent').dataset.firstFixSent = '';
+    localStorage.setItem(STATE_KEY, 'running');
+
+    try {
+      startGps();
+      await requestWakeLock();
+      sendTimer = setInterval(queueLatestFix, config.reportIntervalSeconds * 1000);
+      setActivity('Tracking started. Waiting for GPS and first send.');
+      flushQueue();
+    } catch (error) {
+      setActivity(error.message);
+      stopTracking();
+    }
+  }
+
+  async function stopTracking() {
+    tracking = false;
+    $('trackerState').textContent = 'Stopped';
+    setClass($('trackerState'), '');
+    $('startBtn').disabled = false;
+    $('stopBtn').disabled = true;
+    localStorage.setItem(STATE_KEY, 'stopped');
+    if (sendTimer) clearInterval(sendTimer);
+    sendTimer = null;
+    stopGps();
+    await releaseWakeLock();
+    setActivity('Tracking stopped. Stored reports remain available for retry.');
+    flushQueue();
+  }
+
+  $('startBtn').addEventListener('click', startTracking);
+  $('stopBtn').addEventListener('click', stopTracking);
+  window.addEventListener('online', () => {
+    setActivity('Internet connection restored. Sending queued reports.');
+    flushQueue();
+  });
+  window.addEventListener('offline', () => {
+    setActivity('Internet connection lost. Reports will queue on the phone.');
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (tracking && document.visibilityState === 'visible') requestWakeLock();
+  });
+  window.addEventListener('beforeunload', () => {
+    if (sendTimer) clearInterval(sendTimer);
+  });
+
+  async function init() {
+    try {
+      await loadConfig();
+      updateQueueCount();
+      $('gpsState').textContent = 'Waiting';
+      $('gpsDetail').textContent = 'Select Start Tracking';
+      setActivity('Configuration loaded. Ready for road test.');
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('./service-worker.js').catch(() => {});
+      }
+    } catch (error) {
+      $('trackerState').textContent = 'Setup error';
+      setClass($('trackerState'), 'bad');
+      setActivity(`Could not load tracker configuration: ${error.message}`);
+      $('startBtn').disabled = true;
+    }
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>
